@@ -316,11 +316,20 @@ def build_volume_price(df):
     r_org  = data["organic"]["correlation"]
 
     def scatter_fig(sub_data, color, title):
+        import numpy as np
         fig = px.scatter(sub_data, x="total_volume", y="average_price",
                          opacity=0.35, color_discrete_sequence=[color],
-                         trendline="ols", trendline_color_override=color,
                          labels={"total_volume": "Total Volume (lbs)", "average_price": "Avg Price ($)"})
         fig.update_traces(marker_size=4)
+        x = sub_data["total_volume"].values
+        y = sub_data["average_price"].values
+        mask = np.isfinite(x) & np.isfinite(y)
+        if mask.sum() > 1:
+            m, b = np.polyfit(x[mask], y[mask], 1)
+            x_line = np.array([x[mask].min(), x[mask].max()])
+            fig.add_scatter(x=x_line, y=m * x_line + b,
+                            mode="lines", line=dict(color=color, width=2),
+                            showlegend=False)
         return style_fig(fig, title)
 
     return html.Div([
@@ -364,9 +373,10 @@ def build_product_mix(df):
                     legendgroup=cat,
                 ), row=1, col=col_idx)
                 seen.add(cat)
-        fig.update_layout(**PLOTLY_LAYOUT, barmode="stack",
-                          title_text=title, title_font_size=14,
-                          height=380, legend=dict(title_text=""))
+        fig.update_layout(**{k: v for k, v in PLOTLY_LAYOUT.items() if k != "legend"},
+                          barmode="stack", title_text=title, title_font_size=14,
+                          height=380, legend=dict(title_text="", bgcolor="rgba(0,0,0,0)",
+                                                  bordercolor=C_BORDER, borderwidth=1, font_size=11))
         return fig
 
     return html.Div([
