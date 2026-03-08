@@ -4,6 +4,7 @@ Dash dashboard converting Gabriela Olivera's HW1 notebook analysis.
 Run:  python app.py
 """
 
+import os
 import pandas as pd
 import numpy as np
 import plotly.express as px
@@ -11,7 +12,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 import dash
-from dash import dcc, html, Input, Output, State, callback
+from dash import dcc, html, Input, Output
 
 from data_loader import (
     load_data,
@@ -25,12 +26,13 @@ from data_loader import (
 )
 
 # ── Colour palette ────────────────────────────────────────────────────────────
-C_CONVENTIONAL = "#2A9D8F"   # teal
-C_ORGANIC      = "#E9C46A"   # amber
+C_CONVENTIONAL = "#2A9D8F"
+C_ORGANIC      = "#E9C46A"
 C_CRIMSON      = "#E63946"
 C_SLATE        = "#264653"
 C_CORAL        = "#E76F51"
 C_MINT         = "#57CC99"
+C_AMBER_BAR    = "#F4A261"
 C_BG           = "#F4F6F8"
 C_CARD         = "#FFFFFF"
 C_BORDER       = "#DEE2E6"
@@ -66,7 +68,6 @@ PLOTLY_LAYOUT = dict(
 )
 
 # ── Load data once at startup ─────────────────────────────────────────────────
-import os
 CSV_PATH = os.environ.get("AVOCADO_CSV", "data/avocado.csv")
 DF = load_data(CSV_PATH)
 
@@ -79,11 +80,11 @@ app = dash.Dash(
     __name__,
     title="Avocado Sales Explorer",
     meta_tags=[{"name": "viewport", "content": "width=device-width, initial-scale=1"}],
+    suppress_callback_exceptions=True,
 )
-server = app.server   # for Render / Gunicorn
+server = app.server  # for Render / Gunicorn
 
 
-# ── Helper: styled figure base ────────────────────────────────────────────────
 def style_fig(fig, title=""):
     fig.update_layout(**PLOTLY_LAYOUT, title_text=title, title_font_size=14)
     return fig
@@ -99,10 +100,8 @@ app.layout = html.Div([
                className="subtitle"),
     ], className="dash-header"),
 
-    # ── Global filter bar ────────────────────────────────────────────────────
+    # Global filter bar
     html.Div([
-
-        # Year range
         html.Div([
             html.Div("Year range", className="filter-label"),
             html.Div([
@@ -115,8 +114,6 @@ app.layout = html.Div([
                 ),
             ], style={"width": "420px"}),
         ]),
-
-        # Type checklist
         html.Div([
             html.Div("Type", className="filter-label"),
             dcc.Checklist(
@@ -131,8 +128,6 @@ app.layout = html.Div([
                 labelStyle={"marginRight": "18px", "fontSize": "0.88rem", "fontWeight": "500"},
             ),
         ]),
-
-        # Region dropdown
         html.Div([
             html.Div("Region(s)", className="filter-label"),
             dcc.Dropdown(
@@ -145,38 +140,61 @@ app.layout = html.Div([
                 clearable=True,
             ),
         ]),
-
     ], className="filter-bar"),
 
-    # ── Tabs ─────────────────────────────────────────────────────────────────
+    # Tabs
     dcc.Tabs(
         id="main-tabs",
         value="overview",
         className="custom-tabs",
         children=[
-            dcc.Tab(label="Overview",        value="overview",      className="custom-tab", selected_className="custom-tab--selected"),
-            dcc.Tab(label="Seasonality",     value="seasonality",   className="custom-tab", selected_className="custom-tab--selected"),
-            dcc.Tab(label="Regional",        value="regional",      className="custom-tab", selected_className="custom-tab--selected"),
-            dcc.Tab(label="Volume vs Price", value="volume_price",  className="custom-tab", selected_className="custom-tab--selected"),
-            dcc.Tab(label="Product Mix",     value="product_mix",   className="custom-tab", selected_className="custom-tab--selected"),
+            dcc.Tab(label="Overview",        value="overview",     className="custom-tab", selected_className="custom-tab--selected"),
+            dcc.Tab(label="Seasonality",     value="seasonality",  className="custom-tab", selected_className="custom-tab--selected"),
+            dcc.Tab(label="Regional",        value="regional",     className="custom-tab", selected_className="custom-tab--selected"),
+            dcc.Tab(label="Volume vs Price", value="volume_price", className="custom-tab", selected_className="custom-tab--selected"),
+            dcc.Tab(label="Product Mix",     value="product_mix",  className="custom-tab", selected_className="custom-tab--selected"),
         ],
     ),
 
-    # Tab content placeholder
+    # Hidden stores keep regional sub-control values across tab switches
+    dcc.Store(id="regional-metric-store", data="Average Price"),
+    dcc.Store(id="topn-store",            data=10),
+
     html.Div(id="tab-content", className="tab-content"),
 
 ], style={"minHeight": "100vh", "backgroundColor": C_BG})
 
 
-# ── Master callback: render tab content ───────────────────────────────────────
+# ── Store sync callbacks (only fire when regional controls exist in DOM) ───────
+@app.callback(
+    Output("regional-metric-store", "data"),
+    Input("regional-metric", "value"),
+    prevent_initial_call=True,
+)
+def store_metric(v):
+    return v
+
+
+@app.callback(
+    Output("topn-store", "data"),
+    Input("topn-slider", "value"),
+    prevent_initial_call=True,
+)
+def store_topn(v):
+    return v
+
+
+# ── Master callback ───────────────────────────────────────────────────────────
 @app.callback(
     Output("tab-content", "children"),
-    Input("main-tabs", "value"),
-    Input("year-slider", "value"),
-    Input("type-checklist", "value"),
-    Input("region-dropdown", "value"),
+    Input("main-tabs",             "value"),
+    Input("year-slider",           "value"),
+    Input("type-checklist",        "value"),
+    Input("region-dropdown",       "value"),
+    Input("regional-metric-store", "data"),
+    Input("topn-store",            "data"),
 )
-def render_tab(tab, year_range, types, regions):
+def render_tab(tab, year_range, types, regions, metric, top_n):
     filtered = apply_filters(DF, year_range, types or [], regions or [])
 
     if filtered.empty:
@@ -188,7 +206,7 @@ def render_tab(tab, year_range, types, regions):
     elif tab == "seasonality":
         return build_seasonality(filtered)
     elif tab == "regional":
-        return build_regional_shell()
+        return build_regional(filtered, metric or "Average Price", top_n or 10)
     elif tab == "volume_price":
         return build_volume_price(filtered)
     elif tab == "product_mix":
@@ -201,11 +219,10 @@ def render_tab(tab, year_range, types, regions):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def build_overview(df):
-    data  = get_overview_data(df)
-    kpis  = data["kpis"]
-    mdf   = data["monthly_price"]
+    data = get_overview_data(df)
+    kpis = data["kpis"]
+    mdf  = data["monthly_price"]
 
-    # KPI cards
     def kpi_card(label, value):
         return html.Div([
             html.Div(label, className="kpi-label"),
@@ -213,8 +230,8 @@ def build_overview(df):
         ], className="kpi-card")
 
     def fmt_vol(v):
-        if v >= 1e9:  return f"{v/1e9:.1f}B lbs"
-        if v >= 1e6:  return f"{v/1e6:.1f}M lbs"
+        if v >= 1e9: return f"{v/1e9:.1f}B lbs"
+        if v >= 1e6: return f"{v/1e6:.1f}M lbs"
         return f"{v:,.0f} lbs"
 
     def fmt_rev(v):
@@ -229,7 +246,6 @@ def build_overview(df):
         kpi_card("Weeks in range", f"{kpis['weeks']:,}"),
     ], className="kpi-row")
 
-    # Monthly price line chart
     fig = px.line(
         mdf, x="date", y="average_price", color="type",
         color_discrete_map=TYPE_COLORS,
@@ -241,9 +257,7 @@ def build_overview(df):
     return html.Div([
         kpi_row,
         html.Div([
-            html.Div([
-                dcc.Graph(figure=fig, config={"displayModeBar": False}),
-            ], className="chart-card"),
+            html.Div([dcc.Graph(figure=fig, config={"displayModeBar": False})], className="chart-card"),
         ]),
     ])
 
@@ -258,7 +272,6 @@ def build_seasonality(df):
     mvol = data["monthly_vol"]
     hmap = data["heatmap"]
 
-    # Price seasonality line
     fig_price = px.line(
         mavg, x="month_name", y="average_price", color="type",
         color_discrete_map=TYPE_COLORS,
@@ -269,17 +282,14 @@ def build_seasonality(df):
     fig_price.update_traces(line_width=2)
     style_fig(fig_price, "Price Seasonality")
 
-    # Volume by month bar
     fig_vol = px.bar(
         mvol, x="month_name", y="total_volume",
-        color_discrete_sequence=[C_AMBER_BAR := "#F4A261"],
         labels={"total_volume": "Avg Volume (lbs)", "month_name": "Month"},
         category_orders={"month_name": MONTH_ORDER},
     )
     fig_vol.update_traces(marker_color=C_AMBER_BAR)
     style_fig(fig_vol, "Average Volume by Month")
 
-    # Heatmaps
     heatmap_cards = []
     for t, pivot in hmap.items():
         if pivot.empty:
@@ -290,7 +300,11 @@ def build_seasonality(df):
             labels={"color": "Avg Price ($)", "x": "Month", "y": "Year"},
             aspect="auto",
         )
-        fig_h.update_layout(**PLOTLY_LAYOUT, title_text=f"Price Heatmap: Year × Month — {t.capitalize()}", title_font_size=13)
+        fig_h.update_layout(
+            **PLOTLY_LAYOUT,
+            title_text=f"Price Heatmap: Year × Month — {t.capitalize()}",
+            title_font_size=13,
+        )
         heatmap_cards.append(
             html.Div([dcc.Graph(figure=fig_h, config={"displayModeBar": False})], className="chart-card")
         )
@@ -305,60 +319,40 @@ def build_seasonality(df):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  TAB 3 — REGIONAL  (has its own sub-controls → separate callback)
+#  TAB 3 — REGIONAL
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def build_regional_shell():
-    return html.Div([
-        # Local controls
+def build_regional(df, metric, top_n):
+    controls = html.Div([
         html.Div([
+            html.Div("Metric", className="filter-label"),
+            dcc.RadioItems(
+                id="regional-metric",
+                options=[
+                    {"label": " Average Price", "value": "Average Price"},
+                    {"label": " Total Revenue", "value": "Total Revenue"},
+                    {"label": " Total Volume",  "value": "Total Volume"},
+                ],
+                value=metric,
+                inline=True,
+                inputStyle={"marginRight": "5px", "accentColor": C_CONVENTIONAL},
+                labelStyle={"marginRight": "20px", "fontSize": "0.88rem", "fontWeight": "500"},
+            ),
+        ]),
+        html.Div([
+            html.Div("Top N regions", className="filter-label"),
             html.Div([
-                html.Div("Metric", className="filter-label"),
-                dcc.RadioItems(
-                    id="regional-metric",
-                    options=[
-                        {"label": " Average Price",  "value": "Average Price"},
-                        {"label": " Total Revenue",  "value": "Total Revenue"},
-                        {"label": " Total Volume",   "value": "Total Volume"},
-                    ],
-                    value="Average Price",
-                    inline=True,
-                    inputStyle={"marginRight": "5px", "accentColor": C_CONVENTIONAL},
-                    labelStyle={"marginRight": "20px", "fontSize": "0.88rem", "fontWeight": "500"},
+                dcc.Slider(
+                    id="topn-slider",
+                    min=5, max=20, step=1, value=top_n,
+                    marks={5: "5", 10: "10", 15: "15", 20: "20"},
+                    tooltip={"placement": "bottom", "always_visible": False},
                 ),
-            ]),
-            html.Div([
-                html.Div("Top N regions", className="filter-label"),
-                html.Div([
-                    dcc.Slider(
-                        id="topn-slider",
-                        min=5, max=20, step=1, value=10,
-                        marks={5: "5", 10: "10", 15: "15", 20: "20"},
-                        tooltip={"placement": "bottom", "always_visible": False},
-                    ),
-                ], style={"width": "280px"}),
-            ]),
-        ], className="regional-controls"),
+            ], style={"width": "280px"}),
+        ]),
+    ], className="regional-controls")
 
-        # Charts injected by callback
-        html.Div(id="regional-charts"),
-    ])
-
-
-@app.callback(
-    Output("regional-charts", "children"),
-    Input("regional-metric", "value"),
-    Input("topn-slider", "value"),
-    Input("year-slider", "value"),
-    Input("type-checklist", "value"),
-    Input("region-dropdown", "value"),
-)
-def update_regional(metric, top_n, year_range, types, regions):
-    filtered = apply_filters(DF, year_range, types or [], regions or [])
-    if filtered.empty:
-        return html.Div("No data.", style={"color": C_MUTED})
-
-    data = get_regional_data(filtered, metric, top_n)
+    data = get_regional_data(df, metric, top_n)
 
     axis_labels = {
         "Average Price": "Avg Price ($)",
@@ -368,34 +362,26 @@ def update_regional(metric, top_n, year_range, types, regions):
     x_label = axis_labels[metric]
 
     def make_bar(df_sub, title):
+        col = df_sub.columns[1]
         fig = px.bar(
-            df_sub,
-            x=df_sub.columns[1],
-            y="region",
-            orientation="h",
-            color_discrete_sequence=[C_CRIMSON],
-            labels={df_sub.columns[1]: x_label, "region": ""},
+            df_sub, x=col, y="region", orientation="h",
+            labels={col: x_label, "region": ""},
         )
         fig.update_traces(marker_color=C_CRIMSON)
         style_fig(fig, title)
         fig.update_layout(height=36 * top_n + 80)
         return fig
 
-    rows = []
+    chart_rows = []
     for section, label in [("top", f"Top {top_n} Regions"), ("bottom", f"Bottom {top_n} Regions")]:
-        conv_d = data["conventional"][section]
-        org_d  = data["organic"][section]
-        col_name = data["conventional"]["col"]
-
-        fig_c = make_bar(conv_d, f"Conventional — {label}")
-        fig_o = make_bar(org_d,  f"Organic — {label}")
-
-        rows.append(html.Div([
+        fig_c = make_bar(data["conventional"][section], f"Conventional — {label}")
+        fig_o = make_bar(data["organic"][section],      f"Organic — {label}")
+        chart_rows.append(html.Div([
             html.Div([dcc.Graph(figure=fig_c, config={"displayModeBar": False})], className="chart-card"),
             html.Div([dcc.Graph(figure=fig_o, config={"displayModeBar": False})], className="chart-card"),
         ], className="two-col"))
 
-    return html.Div(rows)
+    return html.Div([controls, *chart_rows])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -407,7 +393,7 @@ def build_volume_price(df):
 
     r_conv = data["conventional"]["correlation"]
     r_org  = data["organic"]["correlation"]
-    banner_text = (
+    banner = (
         f"Pearson correlation (price vs volume)  ·  "
         f"Conventional: {r_conv}  |  Organic: {r_org}  "
         f"— Negative values confirm the Law of Demand."
@@ -430,7 +416,7 @@ def build_volume_price(df):
     fig_o = scatter_fig(data["organic"]["data"],      C_ORGANIC,       "Organic — Volume vs Price")
 
     return html.Div([
-        html.Div(banner_text, className="corr-banner"),
+        html.Div(banner, className="corr-banner"),
         html.Div([
             html.Div([dcc.Graph(figure=fig_c, config={"displayModeBar": False})], className="chart-card"),
             html.Div([dcc.Graph(figure=fig_o, config={"displayModeBar": False})], className="chart-card"),
@@ -445,66 +431,33 @@ def build_volume_price(df):
 def build_product_mix(df):
     data = get_product_mix_data(df)
 
-    def stacked_bar(df_sub, color_map, x_col, y_col, pct_col, title, type_label):
-        fig = go.Figure()
-        for _, row in df_sub.iterrows():
-            cat = row[x_col]
-            fig.add_trace(go.Bar(
-                name=cat,
-                x=[type_label],
-                y=[row[y_col]],
-                marker_color=color_map.get(cat, "#888"),
-                text=f"{row[pct_col]}%",
-                textposition="inside",
-                insidetextanchor="middle",
-            ))
-        fig.update_layout(
-            **PLOTLY_LAYOUT,
-            barmode="stack",
-            title_text=title,
-            title_font_size=13,
-            showlegend=True,
-            legend=dict(title_text=""),
-            xaxis_title="",
-            yaxis_title="Total Volume (lbs)",
-            height=340,
+    def make_combined(key, color_map, x_col, section_title):
+        combined = make_subplots(
+            rows=1, cols=2,
+            subplot_titles=["Type = conventional", "Type = organic"],
+            shared_yaxes=True,
         )
-        return fig
-
-    cards = []
-    for section_title, key, color_map, x_col in [
-        ("PLU Size Breakdown by Type", "plu", PLU_COLORS, "PLU"),
-        ("Bag Size Preferences by Type", "bag", BAG_COLORS, "Bag"),
-    ]:
-        fig_c = stacked_bar(data["conventional"][key], color_map, x_col, "volume", "pct",
-                            f"Type = conventional", "PLU Mix" if key == "plu" else "Bag Mix")
-        fig_o = stacked_bar(data["organic"][key],      color_map, x_col, "volume", "pct",
-                            f"Type = organic",      "PLU Mix" if key == "plu" else "Bag Mix")
-
-        # Merge into a single 2-panel figure with shared legend
-        combined = make_subplots(rows=1, cols=2,
-                                 subplot_titles=["Type = conventional", "Type = organic"],
-                                 shared_yaxes=True)
         seen = set()
-        for trace in fig_c.data:
-            combined.add_trace(
-                go.Bar(name=trace.name, x=trace.x, y=trace.y,
-                       marker_color=trace.marker.color,
-                       text=trace.text, textposition="inside", insidetextanchor="middle",
-                       showlegend=(trace.name not in seen),
-                       legendgroup=trace.name),
-                row=1, col=1,
-            )
-            seen.add(trace.name)
-        for trace in fig_o.data:
-            combined.add_trace(
-                go.Bar(name=trace.name, x=trace.x, y=trace.y,
-                       marker_color=trace.marker.color,
-                       text=trace.text, textposition="inside", insidetextanchor="middle",
-                       showlegend=False,
-                       legendgroup=trace.name),
-                row=1, col=2,
-            )
+        for col_idx, t in enumerate(["conventional", "organic"], start=1):
+            df_sub = data[t][key]
+            for _, row in df_sub.iterrows():
+                cat = row[x_col]
+                combined.add_trace(
+                    go.Bar(
+                        name=cat,
+                        x=["PLU Mix" if key == "plu" else "Bag Mix"],
+                        y=[row["volume"]],
+                        marker_color=color_map.get(cat, "#888"),
+                        text=f"{row['pct']}%",
+                        textposition="inside",
+                        insidetextanchor="middle",
+                        showlegend=(cat not in seen and col_idx == 1),
+                        legendgroup=cat,
+                    ),
+                    row=1, col=col_idx,
+                )
+                seen.add(cat)
+
         combined.update_layout(
             **PLOTLY_LAYOUT,
             barmode="stack",
@@ -513,11 +466,15 @@ def build_product_mix(df):
             height=380,
             legend=dict(title_text=""),
         )
-        cards.append(
-            html.Div([dcc.Graph(figure=combined, config={"displayModeBar": False})], className="chart-card")
-        )
+        return combined
 
-    return html.Div(cards)
+    fig_plu = make_combined("plu", PLU_COLORS, "PLU", "PLU Size Breakdown by Type")
+    fig_bag = make_combined("bag", BAG_COLORS, "Bag", "Bag Size Preferences by Type")
+
+    return html.Div([
+        html.Div([dcc.Graph(figure=fig_plu, config={"displayModeBar": False})], className="chart-card"),
+        html.Div([dcc.Graph(figure=fig_bag, config={"displayModeBar": False})], className="chart-card"),
+    ])
 
 
 # ── Run ───────────────────────────────────────────────────────────────────────
