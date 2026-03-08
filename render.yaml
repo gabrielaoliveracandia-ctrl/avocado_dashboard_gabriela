@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: avocado-dashboard
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:server --bind 0.0.0.0:$PORT --workers 2 --timeout 120
+    envVars:
+      - key: AVOCADO_CSV
+        value: data/avocado.csv
+    autoDeploy: true
